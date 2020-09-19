@@ -8,6 +8,7 @@ package libwebsocketd
 import (
 	"bufio"
 	"io"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -96,13 +97,44 @@ func (pe *ProcessEndpoint) Send(msg []byte) bool {
 }
 
 func (pe *ProcessEndpoint) StartReading() {
-	go pe.log_stderr()
+	//go pe.log_stderr()
 	if pe.bin {
 		go pe.process_binout()
 	} else {
-		go pe.process_txtout()
+		//go pe.process_txtout()
+		go pe.process_txt(pe.process.stdout, pe.process.stderr)
 	}
 }
+
+func (pe *ProcessEndpoint) process_txt( readers ...io.Reader ) {
+	var wg sync.WaitGroup
+	for _, r := range readers {
+		wg.Add(1)
+		reader := r  // this line to capture variables, without which, will always read the last reader
+		go func(){
+			defer wg.Done()
+			buf := bufio.NewReader(reader)
+			for {
+				buf, err := buf.ReadBytes('\n')
+				if err != nil {
+					if err != io.EOF {
+						pe.log.Error("process", "Unexpected error while reading STDOUT from process: %s", err)
+					} else {
+						pe.log.Debug("process", "Process STDOUT/STDERR closed")
+					}
+					break
+				}
+				pe.output <- trimEOL(buf)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	close(pe.output)
+}
+
+
 
 func (pe *ProcessEndpoint) process_txtout() {
 	bufin := bufio.NewReader(pe.process.stdout)
